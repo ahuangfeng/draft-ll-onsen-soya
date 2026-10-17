@@ -48,14 +48,20 @@
     <workgroup>Internet Engineering Task Force</workgroup>
 
     <keyword>yang</keyword>
-    <keyword>mapping</keyword>
+    <keyword>orchestration</keyword>
+    <keyword>service abstraction</keyword>
 
     <abstract>
       <t>
         This document defines the Service Orchestration with YANG-modeled
-        Abstractions (SOYA) Framework for building layered orchestration systems
-        using YANG models, and specifies the interactions between different
-        orchestration layers.
+        Abstractions (SOYA) framework for building layered orchestration
+        systems. Each layer exposes YANG-modeled service intent and operational
+        state, and uses business logic to translate intent into configuration
+        for the layer below. The framework describes the boundaries between
+        layers, the propagation of configuration and state, and the separation
+        of service processing from management protocol implementation. These
+        principles apply to layers hosted within one orchestrator or
+        distributed across several orchestrators.
       </t>
     </abstract>
 
@@ -63,162 +69,243 @@
 
   <middle>
 
-    <section>
+    <section anchor="introduction">
       <name>Introduction</name>
       <t>
-        The YANG Data Modeling Language (<xref target="RFC7950"/>) has become
-        ubiquitous in modern network management and is widely adopted for
-        modeling configuration and state data for network devices. YANG equally
-        lends itself to describing higher-level orchestration intent at various
-        layers of abstraction.
+        The YANG Data Modeling Language (<xref target="RFC7950"/>) describes
+        configuration, state data, operations, and notifications. It can model
+        both individual network devices and service abstractions spanning
+        multiple devices. A service abstraction allows a client to request
+        an outcome at one level of detail while the system providing that
+        service determines how to realize it.
       </t>
       <t>
         This document defines the Service Orchestration with
-        YANG-modeled Abstractions (SOYA) Framework for building layered
-        orchestration systems. Each layer allows for the expression of a service
-        intent, according to a set of YANG models. These layers may be hosted on
-        separate SOYA Orchestrators or within a single SOYA Orchestrator,
-        depending on the deployment architecture.
+        YANG-modeled Abstractions (SOYA) framework. Each service layer exposes
+        a YANG schema, accepts intent expressed through that schema, and
+        translates it into configuration for the next layer. The business
+        logic at each layer implements the translation and determines how
+        observations from below affect the service it provides. This division
+        allows a layer's implementation to evolve while its service interface
+        remains stable.
       </t>
       <t>
-        Service intent, e.g. configuration, flows from the highest abstraction
-        layer down to the managed devices. Operational state, on the
-        other hand, flows from the devices up to the higher abstraction layers.
-        The framework specifies permissible data exchanges between different
-        abstraction layers, both within a single SOYA Orchestrator and across
-        multiple SOYA Orchestrators.
+        Intent flows down through successive abstractions to device
+        configuration. Operational state flows up as each layer evaluates the
+        state of its dependencies and publishes the state of its own services.
+        These relationships are logical: the layers may run within one SOYA
+        Orchestrator or be distributed across several SOYA Orchestrators.
       </t>
-      <section>
-        <name>Definition of SOYA Orchestrator</name>
-        <t>In the context of this document, a SOYA Orchestrator refers to a
-          software component responsible for managing network services by
-          processing service intent and operational state. A variety of terms
-          exist in the industry, including domain orchestrator, network
-          orchestrator, domain controller, and SDN controller. Any platform
-          capable of adhering to the SOYA framework, can be referred to as a
-          SOYA Orchestrator.
+      <section anchor="scope">
+        <name>Scope and Relationship to Existing Work</name>
+        <t>
+          <xref target="RFC8309"/> describes network service models, and
+          <xref target="RFC8969"/> provides a framework for automating service
+          and network management with YANG. SOYA develops the layer boundaries
+          and processing rules for an orchestration system built around such
+          models. Existing service, network, and device models can be used at
+          suitable layers.
         </t>
+        <t>
+          SOYA leaves the number of layers, their schemas, and their business
+          logic to the deployment. A layer may decompose one service into
+          several lower-layer service instances, or combine several inputs
+          into configuration for a shared resource. YANG defines the data and
+          its constraints; executable business logic supplies the mapping
+          between abstractions. The framework accommodates different mapping
+          implementations and management protocols without prescribing a
+          common service schema or a distributed transaction mechanism.
+        </t>
+      </section>
+      <section anchor="terminology">
+        <name>Terminology</name>
+        <t>
+          This document uses the following terms. Datastore terminology follows
+          the Network Management Datastore Architecture (NMDA)
+          (<xref target="RFC8342"/>).
+        </t>
+        <dl>
+          <dt>Service layer:</dt>
+          <dd>A level of abstraction with its own YANG schema, logical
+            datastore context, and business logic. Its configuration expresses
+            the services requested from that layer.</dd>
+          <dt>Service intent:</dt>
+          <dd>The desired configuration of a service instance, expressed as
+            "config true" data in a layer's YANG models. The level of detail
+            depends on the layer providing the service.</dd>
+          <dt>Service instance:</dt>
+          <dd>An identifiable instance of a service described by a layer's
+            models. It may depend on several services or resources below it.</dd>
+          <dt>Business logic:</dt>
+          <dd>The processing that maps a layer's intent to lower-layer
+            configuration, applies service policies, and derives the layer's
+            service state from observations.</dd>
+          <dt>SOYA Orchestrator:</dt>
+          <dd>A software component that hosts one or more service layers and
+            executes their business logic. Platforms described as service
+            orchestrators, domain controllers, or SDN controllers can perform
+            this role when they follow the SOYA layering rules.</dd>
+          <dt>Adapter:</dt>
+          <dd>A component that exposes YANG-modeled configuration and state
+            while implementing the native management protocol of a device
+            whose interface does not use YANG.</dd>
+        </dl>
       </section>
     </section>
 
     <section anchor="soya-orchestrator">
       <name>The SOYA Orchestrator</name>
       <t>
-        A SOYA Orchestrator is a software component capable of receiving,
-        storing, and processing service intent. In a SOYA Orchestrator, intent
-        is stored in a datastore as defined in <xref target="RFC7950"/>.
-        SOYA Orchestrators must implement, at a minimum, the
-        &lt;running-config&gt; datastore as defined in
-        <xref target="RFC8342" section="5.1.3" sectionFormat="of" />.
+        A SOYA Orchestrator receives, stores, and processes service intent for
+        each layer it hosts. Each layer must provide, at a minimum, a logical
+        &lt;running&gt; configuration datastore as defined in
+        <xref target="RFC8342" section="5.1.3" sectionFormat="of"/>. Its
+        contents represent the current intent accepted by that layer.
       </t>
       <t>
-        Processing each received intent update involves executing the
-        SOYA Orchestrator's business logic for that layer. The business logic is
-        responsible for producing an output intent for the next layer down; or
-        forthe managed device(s) in case of the lowest service layer.
+        A change to the running configuration triggers the layer's business
+        logic. That logic determines the configuration needed at the next
+        lower layer. At the lowest service layer, it determines device
+        configuration, submitted through a YANG-based device interface or an
+        adapter. Creation, modification, and deletion of service instances all
+        follow this processing model.
       </t>
       <t>
-        The SOYA Orchestrator may also support receiving/collecting operational
-        state from its managed devices or from other service layers. Processing
-        a received operational state update involves analyzing it according to
-        its business logic and determining the necessary actions. Those may
-        include updating the SOYA Orchestrator's internal state, generating new
-        service intents for the lower layer, or triggering specific
-        configuration changes on managed devices.
-        The SOYA Orchestrator can also propagate operational state
-        updates to the next orchestration layer up, generate notifications, or
-        raise alarms.
+        A layer may also collect operational state from other layers or from
+        the devices it manages. Its business logic evaluates these observations
+        and may update its own service state, generate notifications or alarms,
+        or revise configuration for the next lower layer. Reactions to state
+        follow the same configuration ownership and layering rules as the
+        processing of incoming intent. Only the lowest service layer generates
+        device configuration.
       </t>
       <section anchor="single-layer-orchestrator">
         <name>Single-Layer Orchestrator</name>
         <t>
-          A single-layer SOYA Orchestrator stores and processes service intents
-          and operational state at a specific layer of abstraction. It processes
-          service intents and operational state relevant to its layer and
-          interacts with both the higher orchestration layer (if any) and the
-          lower orchestration layer or managed devices.
+          A single-layer SOYA Orchestrator hosts one service layer. Its
+          northbound interface accepts intent and exposes state for that
+          layer. Its southbound integration delivers generated configuration
+          to the next layer or to managed devices. Several single-layer
+          orchestrators can form a complete orchestration stack.
         </t>
       </section>
       <section anchor="multi-layer-orchestrator">
         <name>Multi-Layer Orchestrator</name>
         <t>
-          A multi-layer SOYA Orchestrator is capable of storing and processing
-          service intents and operational state on multiple layers of
-          abstraction within a single orchestrator instance. The orchestrator
-          must ensure that the layering principles as described in <xref
-          target="service-layering"/> are adhered to for each individual
-          abstraction layer that it hosts.
+          A multi-layer SOYA Orchestrator hosts several service layers within
+          one instance. Each layer retains its own schema, logical datastore
+          context, and business logic, following the rules in
+          <xref target="service-layering"/>. The implementation may share
+          processes, storage infrastructure, or reusable code while preserving
+          these logical boundaries.
         </t>
         <t>
-          In a multi-layer SOYA Orchestrator, the implementation must
-          be written such that proper layering and separation of concerns are
-          maintained at all times. Each individual layer must be thought of
-          as its own YANG datastore in its own namespace. As an intent update
-          triggers the business logic on a particular layer, that layer's
-          business logic must only access (read) intent data (configuration)
-          within its own layer. The business logic may produce an update to the
-          configuration on the layer just below it as described in
-          <xref target="propagating-service-intent-down"/>.
+          A layer's business logic reads intent only from its own layer and
+          submits configuration only to the layer immediately below it, or to
+          devices when it is the lowest service layer. Communication between
+          co-located layers may use internal interfaces, provided that schema
+          validation, configuration ownership, and state semantics are
+          preserved. Co-location does not permit bypassing an intermediate
+          layer.
+        </t>
+      </section>
+      <section anchor="datastore-context">
+        <name>Service Layers and Datastores</name>
+        <t>
+          A service layer is distinct from an NMDA datastore. The
+          &lt;running&gt;, &lt;intended&gt;, and &lt;operational&gt; datastores
+          are views of data within a layer (<xref target="RFC8342"/>).
+          Transforming configuration from &lt;running&gt; to &lt;intended&gt;
+          within that context is distinct from generating configuration for
+          the next SOYA layer, which has its own schema and datastore context.
+        </t>
+        <t>
+          Under NMDA, &lt;operational&gt; contains configuration currently in
+          use, represented by "config true" nodes, together with system state
+          represented by "config false" nodes. Service health, processing
+          progress, and failure information are examples of derived state that
+          a layer can model using "config false" nodes. A layer should define
+          what it means for its intent to be applied and how that differs
+          from the health of the service being provided. These distinctions
+          allow clients to distinguish accepted intent from observed results.
         </t>
       </section>
     </section>
     <section anchor="service-layering">
       <name>Service Layering</name>
       <t>
-        An overall orchestration system may be comprised of multiple layers,
-        each responsible for a specific level of abstraction in managing network
-        services. The schema for each layer is defined by a set of YANG models.
-        All YANG validation is performed within the context of the specific
-        layer's schema. A YANG module from one layers cannot import modules from
-        another layer, XPath expressions may only refer to nodes within the same
-        layer, etc.
+        A SOYA system consists of one or more service layers, each responsible
+        for a particular abstraction. A layer's schema comprises the YANG
+        modules, enabled features, and deviations supported in that layer's
+        datastore context. YANG validation takes place within that context.
+        XPath expressions, leafrefs, and augmentations must resolve within the
+        layer's schema and data trees; they cannot access another layer's
+        datastore.
+      </t>
+      <t>
+        Layers can reuse common modules, types, groupings, and identities.
+        Importing shared definitions, as described in <xref target="RFC7950"/>,
+        does not give access to another layer's data. Similarly, a YANG module
+        retains its namespace when used at more than one layer. The separation
+        between layers is established by their schema and datastore contexts,
+        rather than by assigning a new XML namespace to each layer.
       </t>
       <section anchor="propagating-service-intent-down">
         <name>Propagating Service Intent Down</name>
-        <t>Outside intent configuration (i.e., configuration originating from
-          outside the orchestration system) enters the orchestration system at
-          the top-most service layer only. For this purpose, top-most layer must
-          be exposed through one or more northbound interfaces
-          [<xref target="northbound-interfaces"/>]. It is then propagated down
-          through the layers, with each layer's business logic translating the
-          intent into the appropriate configuration for the layer below.
+        <t>
+          Intent originating outside the orchestration system enters at the
+          highest service layer through the northbound interfaces described
+          in <xref target="northbound-interfaces"/>. Each layer's business logic
+          translates its own intent into configuration for the layer
+          immediately below. The generated configuration becomes the receiving
+          layer's intent and is validated against that layer's schema.
         </t>
         <t>
-          The orchestrator(s) hosting the lower layer(s) must be configured to
-          only accept and apply the configuration updates generated by the layer
-          above. The configuration of the lower layers may be exposed to outside
-          observers in a read-only manner, they should not be allowed to modify
-          it.
+          Lower layers must accept configuration updates only from the layer
+          above. Their configuration may be exposed to authorized outside
+          observers for inspection, but those observers must not modify it.
+          The same ownership rule applies when a state change causes a layer
+          to generate new configuration as part of a recovery action.
         </t>
         <t>
-          The lowest service layer's business logic is responsible for
-          generating the actual device configuration according to the YANG
-          models the managed device(s) support over the available southbound
-          interfaces [<xref target="southbound-interfaces"/>].
+          The lowest service layer translates its intent into configuration
+          expressed through the YANG models exposed by the managed device or
+          its adapter. The southbound interfaces described in
+          <xref target="southbound-interfaces"/> carry these updates to the
+          target. Protocol implementation belongs to the
+          southbound integration; the business logic determines which
+          configuration is needed to provide the service.
         </t>
       </section>
 
       <section anchor="propagating-operational-state-up">
         <name>Propagating Operational State Up</name>
         <t>
-          The business logic at each layer is responsible for maintaining and
-          publishing its own operational state information as "config false"
-          YANG modeled data.
+          Each layer's business logic maintains and publishes the state of
+          the services it provides. Derived information, such as service
+          health or realization progress, is exposed as "config false"
+          YANG-modeled data. The distinction between this information and
+          applied configuration is described in
+          <xref target="datastore-context"/>.
         </t>
         <t>
-          While in the SOYA architecture, it is permissible for the business
-          logic at any layer to read the operational state information from
-          anywhere in the stack, the best practice is for operational state to
-          flow up, layer by layer.
+          A layer may read operational state from anywhere in the stack,
+          subject to authorization. The preferred pattern is to consume state
+          from the layer immediately below and publish an abstraction for the
+          layer above. This limits the knowledge that higher layers need of
+          lower-layer implementation details. Access to operational state
+          does not grant authority to modify the observed layer's
+          configuration or use its running configuration as an additional
+          source of intent.
         </t>
         <t>
-          For example, when a device publishes its operational state updates,
-          they are collected and processed by the business logic at the lowest
-          abstraction layer. That layer may then publish updates to its own
-          operational state information, which is consumed by the layer above
-          and so forth up the stack. This pattern simplifies the business logic
-          at the higher layers, as they only need to deal with the abstracted
-          operational state rather than the raw device-level details.
+          For example, the lowest service layer may evaluate device interface
+          state to determine whether a tunnel is available. The layer above
+          can combine that tunnel state with other dependencies to determine
+          whether a connectivity service is healthy. A failed interface need
+          not imply a failed service if a working alternative still satisfies
+          the service's requirements. Each layer is responsible for the
+          meaning of the state it publishes.
         </t>
         <section>
         <name>SAIN Integration</name>
@@ -227,9 +314,9 @@
             defined in <xref target="RFC9417"/> could be integrated with a SOYA
             Orchestrator to derive an assurance graph from service intent and the
             corresponding configuration generated for lower layers and devices.
-            The SAIN orchestrator would configure SAIN agents using the YANG
-            modules defined in <xref target="RFC9418"/> to monitor the services
-            and their dependencies.
+            The SOYA orchestrator would configure the SAIN orchestrator with the
+            necessary context about the services and their dependencies through
+            the YANG modules defined in <xref target="RFC9418"/>.
           </t>
           <t> The resulting health scores and symptoms,
             gathered by a SAIN collector, could be fed back to the business logic
@@ -241,15 +328,163 @@
           </t>
         </section>
       </section>
+      <section anchor="configuration-ownership">
+        <name>Service Dependencies and Configuration Ownership</name>
+        <t>
+          Each layer should retain the association between a service instance
+          and the lower-layer objects it creates or uses. These associations
+          support fault correlation, updates, recovery, and removal of obsolete
+          configuration. Stable identifiers allow an observation or failure
+          at a lower layer to be related to the affected service instances.
+          The identifiers and associations are maintained through the layer's
+          internal implementation; they do not require cross-layer references
+          such as YANG leafrefs.
+        </t>
+        <t>
+          One service instance may depend on several lower-layer objects, and
+          one lower-layer object may support several services. The layer
+          generating the configuration is responsible for reconciling these
+          demands and resolving conflicts before submitting an update. If
+          several orchestrator instances host the same logical layer, they
+          need an ownership or coordination mechanism so that their writes do
+          not conflict.
+        </t>
+        <t>
+          Deleting a service removes the configuration that is no longer
+          required for that service. Shared objects must remain while they
+          are needed by other services. A layer should retain enough
+          association and processing state to complete or retry cleanup after
+          an interruption, even if the original intent has already been
+          removed from its running configuration.
+        </t>
+      </section>
+      <section anchor="realization-reconciliation">
+        <name>Service Realization and Reconciliation</name>
+        <t>
+          Schema validation determines whether intent conforms to a layer's
+          YANG schema. Realizing valid intent can still fail because of
+          unavailable resources, service policy, communication failures, or
+          errors at a lower layer. A layer may check feasibility before
+          accepting intent where possible, and reports failures discovered
+          during subsequent processing through its operational state.
+        </t>
+        <t>
+          A layer should distinguish acceptance of intent, progress in
+          realizing it, and the resulting service health. The layer's models
+          define the status information and its meaning. Observations should
+          be correlated with the service instance and the intent revision or
+          processing attempt they describe. A delayed result for an older
+          request must not be treated as confirmation that the current
+          request has been realized. Missing or stale observations should be
+          distinguishable from a confirmed service failure.
+        </t>
+        <t>
+          Processing continues after the initial intent update. Following a
+          restart, missed observation, or failed update, a layer reconciles
+          the configuration it has generated with the desired result derived
+          from its current intent. Repeated processing of unchanged intent
+          should converge on the same result without duplicating resources.
+          The southbound integration may retrieve target configuration to
+          synchronize or verify delivery; this does not make target
+          configuration an additional intent source for the layer's business
+          logic.
+        </t>
+        <t>
+          A datastore operation on one target does not provide an atomic
+          transaction across all layers or devices. A layer must account for
+          partial completion and uncertain outcomes, including loss of a
+          response after an update was applied. Its business logic decides
+          whether to retain completed changes, compensate for them, or pursue
+          another realization of the service. The protocol integration or
+          adapter performs the corresponding target operations. Affected
+          service state should remain visible while recovery is in progress.
+        </t>
+      </section>
+    </section>
+
+    <section anchor="layering-example">
+      <name>Example of Layered L3VPN Service Delivery</name>
+      <t>
+        Consider a Layer 3 virtual private network (L3VPN) connecting two
+        customer sites, requested using the L3VPN Service Model (L3SM) in
+        <xref target="RFC8299"/>. The request describes the sites, their
+        network accesses, and connectivity requirements. Three SOYA service
+        layers realize the request, as shown in
+        <xref target="layering-example-figure"/>. The network and device
+        abstraction layers use deployment-specific YANG models.
+      </t>
+      <figure anchor="layering-example-figure">
+        <name>L3VPN Service Delivery Through Abstraction Layers</name>
+        <artwork type="ascii-art" align="center"><![CDATA[
+              Customer / service application
+                |                        ^
+                | L3SM intent            | L3SM state
+                v                        |
+       +------------------------------------------+
+       | Service layer                            |
+       | L3SM (RFC 8299)                          |
+       +------------------------------------------+
+                |                         ^
+ Network intent |                         | network state
+                v                         |
+       +------------------------------------------+
+       | Network layer                            |
+       | Deployment-specific network model        |
+       +------------------------------------------+
+                |                         ^
+Function intent |                         | function state
+                v                         |
+       +------------------------------------------+
+       | Device function layer                    |
+       | VRFs, customer interfaces, ...           |
+       +------------------------------------------+
+                |                         ^
+  Device config |                         | device state
+                v                         |
+       +------------------------------------------+
+       | Device model level                       |
+       | YANG-capable devices or adapters         |
+       +------------------------------------------+
+]]></artwork>
+      </figure>
+      <t>
+        The service layer maps the customer sites and requirements to
+        provider-network endpoints and connectivity. It expresses the result
+        as configuration in the deployment's network model, which becomes the
+        network layer's intent.
+      </t>
+      <t>
+        The network layer decomposes that intent into requests for functions
+        on selected devices: for example, a virtual routing and forwarding
+        (VRF) instance, routed interfaces, BGP neighbors, and bandwidth
+        policies. These requests form the intent consumed by the device
+        abstraction layer.
+      </t>
+      <t>
+        The device abstraction layer translates function requests into
+        configuration conforming to each target's supported device models.
+        Its business logic handles differences in device schemas and
+        capabilities. The southbound integration or YANG-facing adapter
+        performs all management protocol operations, as described in
+        <xref target="southbound-interfaces"/>.
+      </t>
+      <t>
+        If an interface fails, the device abstraction layer reports the
+        affected function's state. The network layer associates that function
+        with the VPN connectivity it provides, and the service layer derives
+        the customer-facing service state through (augmentations to) the L3SM.
+        Any recovery action follows the same layer boundaries.
+      </t>
     </section>
 
     <section anchor="northbound-interfaces">
       <name>Northbound Interfaces</name>
       <t>
         A northbound interface exposes the YANG-modeled service intent and
-        operational state of an orchestration layer. At the top-most layer,
-        clients may include OSS/BSS systems, customer portals, or other
-        applications. At a lower layer, the client submitting intent is the
+        operational state of an orchestration layer. At the highest layer,
+        clients may include operations support systems and business support
+        systems (OSS/BSS), customer portals, or other applications. At a lower
+        layer, the client submitting intent is the
         SOYA Orchestrator hosting the layer immediately above, as described in
         <xref target="propagating-service-intent-down"/>. The same interface
         therefore serves as the northbound interface of the lower layer and
@@ -258,24 +493,32 @@
       <t>
         Each interface must preserve the schema and datastore boundaries of
         the layer it exposes. A multi-layer SOYA Orchestrator may use separate
-        endpoints or another explicit mechanism to select the layer being
-        accessed. Clients should be able to discover the modules, revisions,
-        features, and deviations supported by that layer using YANG Library
-        (<xref target="RFC8525"/>). If multiple protocols expose the same
-        layer, they must provide a consistent view of its configuration and
-        operational state. Access control must enforce the configuration
-        ownership rules in <xref target="propagating-service-intent-down"/>.
+        endpoints or explicitly selected logical server contexts. Each context
+        exposes the datastores and schema of the selected layer. Clients
+        should be able to discover its supported modules, revisions, features,
+        and deviations using YANG Library (<xref target="RFC8525"/>). The
+        deployment defines how the client selects a layer; YANG Library
+        describes the schema within that context. If multiple protocols
+        expose the same layer, they must provide a consistent view of its
+        data. Access control must enforce the ownership rules in
+        <xref target="configuration-ownership"/> and
+        <xref target="propagating-service-intent-down"/>.
       </t>
       <t>
         Incoming intent is validated against the receiving layer's schema
         before it is accepted into the running configuration. Changes to the
         running configuration trigger that layer's business logic. A successful
         protocol response confirms completion of the requested datastore
-        operation; it does not by itself confirm that the intent has been
-        realized on lower layers or devices. The layer's operational state
-        should report the progress and outcome of that processing, including
-        failures, as described in
-        <xref target="propagating-operational-state-up"/>.
+        operation. The layer's operational state reports the progress and
+        outcome of service realization separately, as described in
+        <xref target="realization-reconciliation"/>.
+      </t>
+      <t>
+        Clients may retrieve operational state on demand. An implementation
+        may also offer notifications or datastore subscriptions, such as
+        YANG-Push (<xref target="RFC8641"/>), using supported protocol
+        bindings. Clients need to account for interruptions in state delivery
+        and obtain a current view after reconnecting.
       </t>
 
       <section>
@@ -291,12 +534,13 @@
           request errors are returned as &lt;rpc-error&gt; elements.
         </t>
         <t>
-          Clients retrieve configuration with &lt;get-config&gt; and
-          configuration together with operational state with &lt;get&gt;.
-          When the NETCONF extensions for the Network Management Datastore
-          Architecture (NMDA) are supported (<xref target="RFC8526"/>),
-          &lt;get-data&gt; provides explicit access to the layer's
-          &lt;operational&gt; datastore.
+          Clients retrieve configuration with &lt;get-config&gt; and running
+          configuration together with state data with &lt;get&gt;. When the
+          NETCONF NMDA extensions are supported (<xref target="RFC8526"/>),
+          &lt;get-data&gt; provides explicit access to &lt;operational&gt;,
+          including applied configuration. The configuration returned by the
+          legacy &lt;get&gt; operation is the running configuration and should
+          not be treated as evidence of what has been applied.
         </t>
       </section>
 
@@ -305,20 +549,19 @@
         <t>
           A SOYA Orchestrator may expose a layer as a RESTCONF server
           (<xref target="RFC8040"/>). Service instances are represented as
-          YANG data resources using XML or JSON encoding. Clients create,
-          replace, modify, and delete intent using the POST, PUT, PATCH, and
-          DELETE methods, respectively, and retrieve configuration and
-          operational state using GET. HTTP status codes and RESTCONF error
-          responses report request failures. Clients should use conditional
-          requests with entity-tags to avoid overwriting concurrent changes.
+          YANG data resources using XML or JSON encoding. Clients create
+          intent resources using POST or PUT, replace them using PUT, modify
+          them using PATCH, and delete them using DELETE. GET retrieves
+          configuration and operational state. HTTP status codes and RESTCONF
+          error responses report request failures. Clients should use
+          conditional requests with entity-tags to avoid overwriting
+          concurrent changes.
         </t>
         <t>
           When the RESTCONF NMDA extensions are supported
           (<xref target="RFC8527"/>), clients can explicitly retrieve the
           layer's operational datastore through the
-          {+restconf}/ds/ietf-datastores:operational resource. Operational state
-          may be polled, or changes may be delivered through supported
-          notification or datastore subscription mechanisms.
+          {+restconf}/ds/ietf-datastores:operational resource.
         </t>
       </section>
     </section>
@@ -329,11 +572,10 @@
         A southbound interface carries the configuration generated by a
         layer's business logic to the next lower orchestration layer, or to
         managed devices at the lowest service layer. The SOYA Orchestrator
-        acts as a client of the receiving system. The generated configuration
-        must conform to that system's schema; it is not a direct copy of the
-        higher layer's intent. The interface also provides access to
-        operational state that the business logic can use to update its own
-        layer's state.
+        acts as a client of the receiving system. Its business logic translates
+        intent into configuration that conforms to the receiving system's
+        schema. The interface also provides access to operational state that
+        the business logic uses to derive its own layer's state.
       </t>
       <t>
         The northbound and southbound protocols of a SOYA Orchestrator need
@@ -345,12 +587,12 @@
         Library (<xref target="RFC8525"/>), where available.
       </t>
       <t>
-        A transaction on one receiving system does not provide an atomic
-        transaction across all layers or devices. The sending layer's
-        business logic is responsible for handling partial failures, deciding
-        whether to retry or compensate for completed changes, and reporting
-        the resulting service state. Successful configuration delivery alone
-        is not sufficient evidence that a service is operational.
+        The integration reports configuration results and communication
+        failures to the sending layer. Protocol-level retries and recovery
+        are performed by the integration, while the business logic decides
+        how to respond at the service level. The reconciliation rules in
+        <xref target="realization-reconciliation"/> apply when several
+        targets are involved or an operation's outcome is uncertain.
       </t>
       <section>
         <name>NETCONF</name>
@@ -359,12 +601,20 @@
           NETCONF client (<xref target="RFC6241"/>). It inspects the server's
           advertised capabilities and selects the appropriate configuration
           workflow, such as editing &lt;candidate&gt; and committing it, or
-          editing &lt;running&gt; directly. Locking and optional validation,
-          confirmed-commit, and rollback-on-error capabilities can be used to
-          control updates on that target when supported. The client processes
-          &lt;rpc-error&gt; replies and retrieves configuration and state using
-          &lt;get-config&gt; and &lt;get&gt;, or &lt;get-data&gt; with the NMDA
-          extensions (<xref target="RFC8526"/>).
+          editing &lt;running&gt; directly. Locking coordinates edits to shared
+          datastores. Optional validation, confirmed-commit, and
+          rollback-on-error capabilities provide additional controls when
+          supported. A failed edit can leave partial changes depending on the
+          selected error handling. After an error or a lost response, the
+          client determines the target's state before retrying operations
+          that could conflict with previous work.
+        </t>
+        <t>
+          The client processes &lt;rpc-error&gt; replies and retrieves
+          configuration with &lt;get-config&gt; and running configuration
+          together with state data with &lt;get&gt;. With the NMDA extensions
+          (<xref target="RFC8526"/>), &lt;get-data&gt; on
+          &lt;operational&gt; provides applied configuration and system state.
         </t>
       </section>
 
@@ -400,13 +650,16 @@
           validation, retries, and rollback are also implemented by the adapter
           where supported. The adapter exposes collected device state and
           configuration operation results through its YANG-modeled interface,
-          together with any limitations in the operations it supports.
-          Unavailable state should be represented as unknown.
+          together with any limitations in the operations it supports. The
+          exposed models should provide a way to indicate unavailable or stale
+          state. The adapter uses those model-defined semantics so that a
+          missing observation is distinguishable from a confirmed failure or
+          successful operation.
         </t>
         <t>
           The lowest service layer's business logic consumes the adapter's
           interface as it would a YANG-modeled device interface. It translates
-          service intent into the configuration submitted to the adapter, and
+          service intent into the configuration submitted to the adapter and
           uses the state exposed by the adapter to determine and publish the
           layer's own service-level operational state. Service-level recovery
           decisions remain with the business logic, based on the results and
@@ -417,10 +670,6 @@
       </section>
     </section>
 
-    <section anchor="acknowledgements">
-      <name>Acknowledgements</name>
-      <t>TODO</t>
-    </section>
     <section anchor="IANA">
       <name>IANA Considerations</name>
       <t>This memo includes no request to IANA.</t>
@@ -428,7 +677,43 @@
 
     <section anchor="Security">
       <name>Security Considerations</name>
-      <t>TODO</t>
+      <t>
+        A SOYA Orchestrator translates accepted intent into changes that may
+        affect many services and devices. Management connections must
+        authenticate their peers and protect the integrity and confidentiality
+        of exchanged data. Each layer must authorize configuration changes,
+        operations, and access to state. NETCONF and RESTCONF deployments can
+        use the Network Configuration Access Control Model
+        (<xref target="RFC8341"/>) to express these permissions.
+      </t>
+      <t>
+        Authorization must preserve the ownership rules described in
+        <xref target="propagating-service-intent-down"/>. A client permitted
+        to submit intent at the highest layer must not thereby gain write
+        access to lower layers. Co-located layers need equivalent isolation in
+        their internal interfaces. Access to configuration and operational
+        state should also respect tenant boundaries, since either can reveal
+        customer identities, topology, or service dependencies.
+      </t>
+      <t>
+        Orchestrator and adapter credentials should be limited to the targets
+        and operations required for their roles. Business logic and adapters
+        are trusted components: faulty or compromised translation code can
+        turn an authorized request into unintended configuration. Schema
+        validation should be supplemented with policy and resource checks
+        appropriate to the service. Configuration generated for a lower layer
+        is subject to that layer's own validation and authorization.
+      </t>
+      <t>
+        Operational observations can trigger automated recovery. Their source,
+        integrity, and freshness therefore matter as much as those of incoming
+        intent. A layer should account for stale, replayed, or missing
+        observations before generating changes. Audit records should relate
+        incoming intent, generated configuration, relevant observations, and
+        recovery actions to the affected service instances. Logs and retained
+        associations require protection appropriate to the sensitive data
+        they contain.
+      </t>
     </section>
 
   </middle>
@@ -438,16 +723,21 @@
       <name>References</name>
       <references>
         <name>Normative References</name>
-        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7950.xml"/>
-        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8342.xml"/>
-      </references>
-      <references>
-        <name>Informative References</name>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.6241.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7950.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8040.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8342.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8525.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8526.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8527.xml"/>
+      </references>
+      <references>
+        <name>Informative References</name>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8299.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8309.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8341.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8641.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8969.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9417.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9418.xml"/>
       </references>
