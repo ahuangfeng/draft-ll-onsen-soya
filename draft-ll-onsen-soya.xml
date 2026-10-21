@@ -44,8 +44,8 @@
 
     <date year="2026"/>
 
-    <area>General</area>
-    <workgroup>Internet Engineering Task Force</workgroup>
+    <area>Operations and Management</area>
+    <workgroup>ONSEN</workgroup>
 
     <keyword>yang</keyword>
     <keyword>orchestration</keyword>
@@ -72,6 +72,52 @@
     <section anchor="introduction">
       <name>Introduction</name>
       <t>
+        Delivering a network service requires a service provider to translate
+        service requirements into network and device configuration. This
+        translation involves decisions at different levels: what service is
+        required, which network resources and functions will provide it, and
+        how those functions are configured on particular devices. Combining
+        these decisions in the same automation logic couples service delivery
+        to the details of the underlying infrastructure.
+      </t>
+      <t>
+        Service abstractions provide boundaries between these decisions. For
+        example, a device replacement may change how a network function is
+        configured without changing the service that depends on it. Such
+        boundaries also support delegation between teams: one team can request
+        a capability while the team providing it retains responsibility for
+        its implementation. To preserve these boundaries, each abstraction
+        needs a defined interface and clear authority over the configuration
+        used to realize it.
+      </t>
+      <t>
+        These responsibilities continue after initial provisioning. Accepted
+        service requirements may not yet be realized, configuration changes
+        may complete only partially, and failures in shared resources may
+        affect several services. Each abstraction therefore needs to relate
+        its requested services to their dependencies and report whether those
+        services have been realized and remain healthy.
+      </t>
+      <t>
+        YANG (<xref target="RFC7950"/>) can describe configuration and
+        operational state at each level of abstraction. Building an
+        orchestration system from these models also requires rules for how
+        the abstractions interact: where translation takes place, which
+        component may change configuration, and how observations are
+        interpreted as service state.
+      </t>
+      <t>
+        This document defines the Service Orchestration with YANG-modeled
+        Abstractions (SOYA) framework to describe these interactions. Each
+        layer exposes a YANG-modeled service interface, translates its
+        accepted intent into configuration for the layer immediately below,
+        and derives its service state from operational observations. The
+        framework defines schema and datastore boundaries, configuration
+        ownership, and processing responsibilities. These rules apply
+        whether layers are hosted within one orchestrator or distributed
+        across several orchestrators.
+      </t>
+      <!-- <t>
         The YANG Data Modeling Language (<xref target="RFC7950"/>) describes
         configuration, state data, operations, and notifications. It can model
         both individual network devices and service abstractions spanning
@@ -95,7 +141,7 @@
         state of its dependencies and publishes the state of its own services.
         These relationships are logical: the layers may run within one SOYA
         Orchestrator or be distributed across several SOYA Orchestrators.
-      </t>
+      </t> -->
       <section anchor="scope">
         <name>Scope and Relationship to Existing Work</name>
         <t>
